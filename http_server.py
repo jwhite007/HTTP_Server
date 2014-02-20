@@ -1,99 +1,139 @@
 #! /usr/bin/env python
-#
+
 from email.utils import formatdate
-import socket
-from os.path import isfile, join
 from mimetypes import guess_type
-
-# import select
-
-
-# def HTTP_server(self):
-
-#     server_socket = socket.socket(
-#         socket.AF_INET,
-#         socket.SOCK_STREAM,
-#         socket.IPPROTO_TCP)
-
-#     address = ('127.0.0.1', 50000)
-#     server_socket.bind(address)
-#     server_socket.listen(1)
-#     while True:
-#         rcv_request()
-#         conn.sendall(rec_message)
-#     # select():
-#     conn.close()
+import socket
+from os.path import isfile, isdir
+from os import listdir
 
 
-# def rcv_request(self):
+def http_server():
+    """Start an http server that listens for client requests."""
+    #Set up the server socket.
+    server_socket = socket.socket(
+        socket.AF_INET,
+        socket.SOCK_STREAM,
+        socket.IPPROTO_IP)
 
-#     while True:
-#         conn, addr = server_socket.accept()  # this blocks until a client connects
+    try:
+        #Connect the server socket.
+        server_socket.bind(('127.0.0.1', 50000))
+        server_socket.listen(1)
 
-#         rec_message = conn.recv(32)
+        #Loop indefinitely while waiting for connections.
 
-#     return message
+        while True:
+            try:
+                conn, addr = server_socket.accept()
+                msg = receive_message(conn)
+                uri = parse_request(msg)
+                resource, mimetype = map_uri(uri)
+
+            except Error404:
+                response = build_response(resource, mimetype, '404')
+
+            except Error405:
+                response = build_response(resource, mimetype, '405')
+
+            except BaseException as e:
+                response = build_response(resource, mimetype, '500')
+                print(e)
+
+            else:
+                response = build_response(resource, mimetype)
+
+            finally:
+                conn.sendall(response)
+                conn.shutdown(socket.SHUT_WR)
+                conn.close()
+
+    finally:
+        #Make sure the socket is closed when we can't continue.
+        print("Closing the socket.")
+        server_socket.close()
 
 
-# def parse_request(message):
-#     check method for GET
-#         if bad raise exception
-#     catch bad method
-#         build 405
-#         return to client
-#     check for submission type (directory or file)
-#     if directory:
-#         show tree
+def receive_message(conn, buffsize=4096):
+    """When a connection is received by the http_server, this function
+    pieces together the message received and returns it.
+    """
 
-# def lookup():
-# map URI onto filesystem (get type and byte number?)
-#             if missing:
-#                 raise exception
-#             if file:
-#                 read it
-#                 determine type
-#                 build a 200 response
-#                 return to client
-#             if folder:
-#                 use os to list directory
-#                 build string using utf-8 encoding to send back
-#                 build a 200 response
-#                 return to client
+    msg = ''
+    while True:
+        msg_part = conn.recv(buffsize)
+        msg += msg_part
+        if len(msg_part) < buffsize:
+            break
+
+    conn.shutdown(socket.SHUT_RD)
+
+    return msg
 
 
-# def build_response(relative_uri):
+def parse_request(request):
+    first_rn = request.find('\r\n')
+    first_line = request[:first_rn]
+    if first_line.split()[0] == 'GET':
+        uri = first_line.split()[1]
+        return uri
+    else:
+        raise ParseException("405: Method not allowed. Only GET is allowed.")
 
-#     if relative_uri.endswith('/'):
-#         return relative_uri + " is a directory"
-#     else:
-#         if isfile(join(path, relative_uri)):
-#             return relative_uri + " is a file"
-#         else:
-#             return relative_uri + " is not a file: 404"
+
+def map_uri(uri):
+    """Given a uri, looks up the corresponding file in the file system.
+    Returns a tuple containing the byte-string represenation of its
+    contents and its mimetype code.
+    """
+    #URIs come in based in root. Make root the 'webroot' directory.
+    filepath = 'webroot' + uri  # security risk using 'webroot'.  someon could navigate dir tree with ../../, etc.
+
+    if isfile(filepath):
+        with open(filepath, 'rb') as infile:
+            message = infile.read() # readlines will result in a list of lines
+
+        return (message, guess_type(filepath)[0])
+
+    if isdir(filepath):
+        contents = listdir(filepath)
+        return ('\n'.join(contents), 'text/plain')
+
+    #If what we received was not a file or a directory, raise an Error404.
+    raise Error404
+
 
 def build_response(message, mimetype, code="OK 200"):
-
-    if not isinstance(bytes):
+    """Build a response with the specified code and content."""
+    # Headers should all be ascii
+    if not isinstance(message, bytes):
         message = message.encode('utf-8')
-    bytelen = len(bytes)
-    header_list = []
-    status_line = 'HTTP/1.1 ' + code + '\r\n'
-    header_list.append(status_line)
-    timestamp = 'Date: ' + formatdate(usegmt=True) + '\r\n'
-    header_list.append(timestamp)
-    server_line = 'Server: Team Python\r\n'
-    header_list.append(server_line)
-    content_type = 'Content-Type: ' + mimetype + '; char=UTF-8\r\n'
-    header_list.append(content_type)
-    content_len = 'Content-Length: ' + str(bytelen) + '\r\n'
-    header_list.append(content_len)
-    header_list.append('\r\n')
-    header = '\r\n'.join(header_list)
-    return (header, message)
+    bytelen = len(message)
+    resp_list = []
+    resp_list.append('HTTP/1.1 %s' % code)
+    resp_list.append('Date: %s' % formatdate(usegmt=True))
+    resp_list.append('Server: Team Python')
+    resp_list.append('Content-Type: %s; char=UTF-8' % mimetype)
+    resp_list.append('Content-Length: %s' % str(bytelen))
+    resp_list.append('\r\n')
+    resp_list.append(message)
+    resp = '\r\n'.join(resp_list)
+    return resp
 
-# conn.shutdown(socket.SHUT_RD)
-# conn.shutdown(socket.SHUT_WR)
-# server_socket.close()
+
+class Error404(BaseException):
+    """Exception raised when a file specified by a URI does not exist."""
+    pass
+
+
+class Error405(BaseException):
+    """Exception raised when a method other than GET is requested."""
+    pass
+
+
+class ParseException(Exception):
+    """An empty class to pass useful exceptions."""
+    pass
+
 
 if __name__ == '__main__':
-    """Documentaion and tests"""
+    http_server()
