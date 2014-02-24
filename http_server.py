@@ -4,7 +4,7 @@ from email.utils import formatdate
 from mimetypes import guess_type
 import socket
 from os.path import isfile, isdir
-from os import listdir
+from os import listdir, getcwd
 
 
 def http_server():
@@ -29,27 +29,23 @@ def http_server():
                 uri = parse_request(msg)
                 resource, mimetype = map_uri(uri)
 
-            except Error404:
-                response = build_response(resource, mimetype, '404')
+            except (Error404, ParseException) as e:
+                response = build_response(e.message, 'text/plain', e.code)
 
-            except Error405:
-                response = build_response(resource, mimetype, '405')
-
-            except BaseException as e:
-                response = build_response(resource, mimetype, '500')
-                print(e)
-
+            except:
+                response = build_response("500 Internal Server Error",
+                    'text/plain', '500')
             else:
                 response = build_response(resource, mimetype)
 
             finally:
                 conn.sendall(response)
-                conn.shutdown(socket.SHUT_WR)
+                # conn.shutdown(socket.SHUT_WR)
                 conn.close()
 
     finally:
         #Make sure the socket is closed when we can't continue.
-        print("Closing the socket.")
+        # print("Closing the socket.")
         server_socket.close()
 
 
@@ -96,13 +92,19 @@ def map_uri(uri):
 
     if isdir(filepath):
         contents = listdir(filepath)
+        for i in range(len(contents)):
+            if isdir('%s/webroot/%s' % (getcwd(), contents[i])):
+                contents[i] += '/'
         return ('\n'.join(contents), 'text/plain')
+        # contents = listdir(filepath)
+        # return ('\n'.join(contents), 'text/plain')
 
     #If what we received was not a file or a directory, raise an Error404.
-    raise Error404
+    raise Error404("404: File not found.")
+    # raise Error404
 
 
-def build_response(message, mimetype, code="OK 200"):
+def build_response(message, mimetype, code='200 OK'):
     """Build a response with the specified code and content."""
     # Headers should all be ascii
     if not isinstance(message, bytes):
@@ -114,26 +116,19 @@ def build_response(message, mimetype, code="OK 200"):
     resp_list.append('Server: Team Python')
     resp_list.append('Content-Type: %s; char=UTF-8' % mimetype)
     resp_list.append('Content-Length: %s' % str(bytelen))
-    resp_list.append('\r\n')
-    resp_list.append(message)
+    resp_list.append('\r\n%s' % message)
     resp = '\r\n'.join(resp_list)
     return resp
 
 
 class Error404(BaseException):
     """Exception raised when a file specified by a URI does not exist."""
-    pass
-
-
-class Error405(BaseException):
-    """Exception raised when a method other than GET is requested."""
-    pass
+    code = '404'
 
 
 class ParseException(Exception):
     """An empty class to pass useful exceptions."""
-    pass
-
+    code = '405'
 
 if __name__ == '__main__':
     http_server()
